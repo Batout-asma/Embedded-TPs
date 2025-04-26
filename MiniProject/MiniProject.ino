@@ -1,6 +1,10 @@
 #include "BluetoothSerial.h"
+#include <Ultrasonic.h>
 
 BluetoothSerial SerialBT;
+Ultrasonic ultrasonicFront(22, 23);
+Ultrasonic ultrasonicLeft (12, 13);
+Ultrasonic ultrasonicRight(25, 26);
 
 int motor1Pin1 = 2;  // IN1
 int motor1Pin2 = 4;  // IN2
@@ -10,12 +14,18 @@ int motor2Pin1 = 19; // IN1
 int motor2Pin2 = 21; // IN2
 int enable2Pin = 18; // ENA
 
-// Setting PWM properties
 const int freq = 30000;
 const int pwmChannel = 0;
 const int resolution = 8;
 int dutyCycle = 255;
-int backwardDutyCycle = 120;
+int backwardDutyCycle = 90;
+
+const long frontStopDistanceCm = 10;
+const long sideCheckDelayMs = 200;
+const long turnDurationMs = 750;
+
+bool obstacleDetected = false;
+bool isMovingForward = false;
 
 void setup() {
   // sets the pins as outputs:
@@ -32,46 +42,96 @@ void setup() {
   ledcAttachChannel(enable2Pin, freq, resolution, pwmChannel + 1);
 
   Serial.begin(115200);
-  SerialBT.begin("ESP32"); // Name of your ESP32 in the Lightblue app
-  Serial.println("Bluetooth Device Started! Connect with Lightblue app.");
+  SerialBT.begin("ESP32");
 
-  // testing
-  Serial.println("Testing DC Motors (initial)...");
   stopMotors(); // Initialize motors to stop
 }
 
 void loop() {
-  if (SerialBT.available()) {
-    char command = SerialBT.read();
-    Serial.print("Received command: ");
-    Serial.println(command);
+  long frontDistanceCm = ultrasonicFront.read(); // Measure the distance with the front sensor
+  Serial.print("Front Distance: ");
+  Serial.print(frontDistanceCm);
+  Serial.println(" cm");
 
-    switch (command) {
-      case 'F':
-        moveForward();
-        break;
-      case 'B':
-        moveBackward();
-        break;
-      case 'S':
-        stopMotors();
-        break;
-      case 'L':
-        TurnLeft();
-        delay(400);
-        stopMotors();
-        break;
-      case 'R':
-        TurnRight();
-        delay(400); // Turn for 1 second
-        stopMotors();
-        break;
-      default:
-        Serial.println("Unknown command!");
-        break;
+  if (frontDistanceCm <= frontStopDistanceCm && isMovingForward && !obstacleDetected) {
+    obstacleDetected = true;
+    stopMotors();
+    delay(500); // Give time for motors to stop
+
+    long leftDistanceCm = ultrasonicLeft.read();
+    Serial.print("Left Distance: ");
+    Serial.print(leftDistanceCm);
+    Serial.println(" cm");
+    delay(sideCheckDelayMs);
+
+    long rightDistanceCm = ultrasonicRight.read();
+    Serial.print("Right Distance: ");
+    Serial.print(rightDistanceCm);
+    Serial.println(" cm");
+
+    if (leftDistanceCm >= rightDistanceCm) {
+      Serial.println("Turning Left.");
+      TurnLeft();
+      delay(turnDurationMs);
+      stopMotors();
+      delay(500);
+      moveForward(); // Continue forward after turning
+    } else {
+      Serial.println("Turning Right.");
+      TurnRight();
+      delay(turnDurationMs);
+      stopMotors();
+      delay(500);
+      moveForward(); // Continue forward after turning
+    }
+    obstacleDetected = false; // Reset the obstacle detected flag
+  } else if (frontDistanceCm <= frontStopDistanceCm) {
+    Serial.println("Obstacle detected! Stopping motors.");
+    stopMotors();
+    obstacleDetected = false; // Reset the flag in case it was set previously
+  } else {
+    if (SerialBT.available()) {
+      char command = SerialBT.read();
+      Serial.print("Received command: ");
+      Serial.println(command);
+
+      switch (command) {
+        case 'F':
+          moveForward();
+          isMovingForward = true; // Set the flag when moving forward
+          obstacleDetected = false;
+          break;
+        case 'B':
+          moveBackward();
+          isMovingForward = false; // Reset the flag
+          obstacleDetected = false;
+          break;
+        case 'S':
+          stopMotors();
+          isMovingForward = false; // Reset the flag
+          obstacleDetected = false;
+          break;
+        case 'L':
+          TurnLeft();
+          delay(1000); // Turn for 1 second
+          stopMotors(); // Stop after turning
+          isMovingForward = false; // Reset the flag
+          obstacleDetected = false;
+          break;
+        case 'R':
+          TurnRight();
+          delay(1000); // Turn for 1 second
+          stopMotors(); // Stop after turning
+          isMovingForward = false; // Reset the flag
+          obstacleDetected = false;
+          break;
+        default:
+          Serial.println("Unknown command!");
+          break;
+      }
     }
   }
-  delay(20); // Small delay to prevent busy-waiting
+  delay(100); // Small delay for sensor readings and Bluetooth
 }
 
 void moveForward() {
@@ -110,7 +170,7 @@ void TurnLeft() {
   digitalWrite(motor1Pin2, LOW);
   digitalWrite(motor2Pin1, LOW);
   digitalWrite(motor2Pin2, HIGH);
-  ledcWrite(enable1Pin, dutyCycle);
+  ledcWrite(enable1Pin, dutyCycle); // Apply speed to the turning motors
   ledcWrite(enable2Pin, dutyCycle);
 }
 
@@ -120,7 +180,5 @@ void TurnRight() {
   digitalWrite(motor1Pin2, HIGH);
   digitalWrite(motor2Pin1, HIGH);
   digitalWrite(motor2Pin2, LOW);
-  ledcWrite(enable1Pin, dutyCycle);
-  ledcWrite(enable2Pin, dutyCycle);
-  
+  ledcWrite(enable1Pin, dutyCycle); // Apply speed to the turning motors
 }
