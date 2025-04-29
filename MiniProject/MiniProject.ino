@@ -35,6 +35,12 @@ bool obstacleDetected = false;
 bool isMovingForward = false;
 bool isMovingBackward = false;
 
+const int mq2Pin = 36;
+const int mq2Threshold = 5;
+int mq2Value = 0;
+
+const int buzzerPin = 34;
+
 void setup() {
   pinMode(motor1Pin1, OUTPUT);
   pinMode(motor1Pin2, OUTPUT);
@@ -53,35 +59,45 @@ void setup() {
   servoSensor.attach(servoPin);
   servoSensor.write(servoForwardAngle);
 
+  pinMode(buzzerPin, OUTPUT);
+  digitalWrite(buzzerPin, LOW);
+  
   stopMotors();
 }
 
 void loop() {
   long frontDistanceCm = ultrasonicFront.read();
 
+  mq2Value = analogRead(mq2Pin);
+  Serial.print("MQ-2 Value: ");
+  Serial.println(mq2Value);
+
+  if (mq2Value > 0) {
+    Serial.println("Flame detected! Activating buzzer.");
+    digitalWrite(buzzerPin, HIGH);
+    delay(500);
+    digitalWrite(buzzerPin, LOW);
+    delay(1000);
+  }
+
   if (frontDistanceCm <= frontStopDistanceCm && isMovingForward && !obstacleDetected) {
-    Serial.println("Obstacle detected while moving forward! Initiating obstacle avoidance.");
     obstacleDetected = true;
     stopMotors();
     delay(500);
 
     long leftDistanceCm = ultrasonicLeft.read();
-    Serial.print("Left Distance: ");
     Serial.println(leftDistanceCm);
     delay(sideCheckDelayMs);
     long rightDistanceCm = ultrasonicRight.read();
-    Serial.print("Right Distance: ");
     Serial.println(rightDistanceCm);
 
     if (leftDistanceCm >= rightDistanceCm) {
-      Serial.println("Turning Left.");
       TurnLeft();
       delay(turnDurationMs);
       stopMotors();
       delay(500);
       moveForward();
     } else {
-      Serial.println("Turning Right.");
       TurnRight();
       delay(turnDurationMs);
       stopMotors();
@@ -98,11 +114,9 @@ void loop() {
 
   if (SerialBT.available()) {
     char command = SerialBT.read();
-    Serial.print("Received command: ");
     Serial.println(command);
     switch (command) {
       case 'F':
-        Serial.println("Command: F");
         servoSensor.write(servoForwardAngle);  // Set servo to forward on 'F'
         delay(100);
         moveForward();
@@ -111,7 +125,6 @@ void loop() {
         obstacleDetected = false;
         break;
       case 'B':
-        Serial.println("Command: B");
         servoSensor.write(servoBackwardAngle);  // Set servo to backward on 'B'
         delay(100);
         moveBackward();
@@ -120,14 +133,12 @@ void loop() {
         obstacleDetected = false;
         break;
       case 'S':
-        Serial.println("Command: S");
         stopMotors();
         isMovingForward = false;
         isMovingBackward = false;
         obstacleDetected = false;
         break;
       case 'L':
-        Serial.println("Command: L");
         TurnLeft();
         delay(1000);
         stopMotors();
@@ -136,7 +147,6 @@ void loop() {
         obstacleDetected = false;
         break;
       case 'R':
-        Serial.println("Command: R");
         TurnRight();
         delay(1000);
         stopMotors();
@@ -154,21 +164,16 @@ void loop() {
 
 void checkObstacleAndStop() {
   long frontDistanceCm = ultrasonicFront.read();
-  Serial.print("Distance (in check function): ");
-  Serial.println(frontDistanceCm);
   if (frontDistanceCm <= frontStopDistanceCm && isMovingForward) {
-    Serial.println("Obstacle detected in front! Stopping motors.");
     stopMotors();
     obstacleDetected = true;
   }else if (frontDistanceCm <= rearStopDistanceCm && isMovingBackward) {
-    Serial.println("Obstacle detected in back! Stopping motors.");
     stopMotors();
     obstacleDetected = true;
   }
 }
 
 void moveForward() {
-  Serial.println("Moving Forward");
   digitalWrite(motor1Pin1, LOW);
   digitalWrite(motor1Pin2, HIGH);
   digitalWrite(motor2Pin1, LOW);
@@ -178,7 +183,6 @@ void moveForward() {
 }
 
 void moveBackward() {
-  Serial.println("Moving Backwards at 30% speed");
   digitalWrite(motor1Pin1, HIGH);
   digitalWrite(motor1Pin2, LOW);
   digitalWrite(motor2Pin1, HIGH);
@@ -188,7 +192,6 @@ void moveBackward() {
 }
 
 void stopMotors() {
-  Serial.println("Motors stopped");
   digitalWrite(motor1Pin1, LOW);
   digitalWrite(motor1Pin2, LOW);
   digitalWrite(motor2Pin1, LOW);
@@ -198,7 +201,6 @@ void stopMotors() {
 }
 
 void TurnLeft() {
-  Serial.println("Turn Left");
   digitalWrite(motor1Pin1, HIGH);
   digitalWrite(motor1Pin2, LOW);
   digitalWrite(motor2Pin1, LOW);
@@ -208,7 +210,6 @@ void TurnLeft() {
 }
 
 void TurnRight() {
-  Serial.println("Turn Right");
   digitalWrite(motor1Pin1, LOW);
   digitalWrite(motor1Pin2, HIGH);
   digitalWrite(motor2Pin1, HIGH);
