@@ -1,219 +1,230 @@
-#include "BluetoothSerial.h"
+#include <BluetoothSerial.h>
 #include <Ultrasonic.h>
-#include <ESP32Servo.h>
 
-BluetoothSerial SerialBT;
+#define ENA 5
+#define ENB 18
+#define IN1 2
+#define IN2 4
+#define IN3 19
+#define IN4 21
+#define MQ2 27
+#define buzzerPin 16
+
+BluetoothSerial BTSerial;
 Ultrasonic ultrasonicFront(22, 23);
-Ultrasonic ultrasonicLeft(12, 13);
-Ultrasonic ultrasonicRight(25, 26);
+Ultrasonic ultrasonicBack(12, 14);
 
-Servo servoSensor;
-const int servoPin = 27;
-const int servoForwardAngle = 0;
-const int servoBackwardAngle = 180;
-const long rearStopDistanceCm = 7;
-
-int motor1Pin1 = 2;
-int motor1Pin2 = 4;
-int enable1Pin = 5;
-
-int motor2Pin1 = 19;
-int motor2Pin2 = 21;
-int enable2Pin = 18;
-
-const int freq = 30000;
-const int pwmChannel = 0;
-const int resolution = 8;
-int dutyCycle = 200;
-int backwardDutyCycle = 100;
-
-const long frontStopDistanceCm = 10;
-const long sideCheckDelayMs = 200;
-const long turnDurationMs = 750;
-
-bool obstacleDetected = false;
 bool isMovingForward = false;
 bool isMovingBackward = false;
-
-const int mq2Pin = 36;
-const int mq2Threshold = 5;
 int mq2Value = 0;
 
-const int buzzerPin = 34;
+bool autoMode = false;
+
+enum AutoState {
+  IDLE,
+  MOVE_FORWARD,
+  TURN_RIGHT_AND_MOVE,
+};
+
+AutoState autoState = IDLE;
+unsigned long lastActionTime = 0;
 
 void setup() {
-  pinMode(motor1Pin1, OUTPUT);
-  pinMode(motor1Pin2, OUTPUT);
-  pinMode(enable1Pin, OUTPUT);
-
-  pinMode(motor2Pin1, OUTPUT);
-  pinMode(motor2Pin2, OUTPUT);
-  pinMode(enable2Pin, OUTPUT);
-
-  ledcAttachChannel(enable1Pin, freq, resolution, pwmChannel);
-  ledcAttachChannel(enable2Pin, freq, resolution, pwmChannel + 1);
-
-  Serial.begin(115200);
-  SerialBT.begin("ESP32");
-
-  servoSensor.attach(servoPin);
-  servoSensor.write(servoForwardAngle);
-
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
   pinMode(buzzerPin, OUTPUT);
-  digitalWrite(buzzerPin, LOW);
-  
-  stopMotors();
+  pinMode(MQ2, INPUT);
+
+  digitalWrite(ENA, HIGH);
+  digitalWrite(ENB, HIGH);
+
+  BTSerial.begin("ESP32_Flama");
+  Serial.begin(115200);
 }
 
 void loop() {
-  long frontDistanceCm = ultrasonicFront.read();
+  if (BTSerial.available()) {
+    char command = BTSerial.read();
+    Serial.println(command);
+    autoMode = false;
 
-  mq2Value = analogRead(mq2Pin);
+    switch (command) {
+      case 'F':
+        moveForward();
+        break;
+      case 'B':
+        moveBackward();
+        break;
+      case 'L':
+        turnLeft();
+        delay(200);
+        moveForward();
+        delay(150);
+        turnLeft();
+        delay(200);
+        moveForward();
+        delay(150);
+        turnLeft();
+        delay(200);
+        stopMotors();
+        break;
+      case 'R':
+        turnRight();
+        delay(200);
+        moveBackward();
+        delay(150);
+        turnRight();
+        delay(200);
+        stopMotors();
+        break;
+      case 'S':
+        stopMotors();
+        break;
+      case 'A':
+        autoMode = true;
+        autoState = MOVE_FORWARD;
+        break;
+    }
+  }
+
+  long distanceFront = ultrasonicFront.read();
+  long distanceBack = ultrasonicBack.read();
+
+  mq2Value = digitalRead(MQ2);
   Serial.print("MQ-2 Value: ");
   Serial.println(mq2Value);
 
   if (mq2Value > 0) {
-    Serial.println("Flame detected! Activating buzzer.");
+    BTSerial.println("G");
+    Serial.println("Flame detected!");
     digitalWrite(buzzerPin, HIGH);
-    delay(500);
+    delay(1000);
     digitalWrite(buzzerPin, LOW);
     delay(1000);
   }
 
-  if (frontDistanceCm <= frontStopDistanceCm && isMovingForward && !obstacleDetected) {
-    obstacleDetected = true;
-    stopMotors();
-    delay(500);
-
-    long leftDistanceCm = ultrasonicLeft.read();
-    Serial.println(leftDistanceCm);
-    delay(sideCheckDelayMs);
-    long rightDistanceCm = ultrasonicRight.read();
-    Serial.println(rightDistanceCm);
-
-    if (leftDistanceCm >= rightDistanceCm) {
-      TurnLeft();
-      delay(turnDurationMs);
-      stopMotors();
-      delay(500);
-      moveForward();
-    } else {
-      TurnRight();
-      delay(turnDurationMs);
-      stopMotors();
-      delay(500);
-      moveForward();
-    }
-    obstacleDetected = false;
-    checkObstacleAndStop();
+  if (!autoMode) {
+    if (isMovingForward && distanceFront > 0 && distanceFront < 30) stopMotors();
+    if (isMovingBackward && distanceBack > 0 && distanceBack < 30) stopMotors();
   }
 
-  if (frontDistanceCm <= frontStopDistanceCm && isMovingBackward && !obstacleDetected) {
-    checkObstacleAndStop();
+  if (autoMode) {
+    handleAutoMode(distanceFront);
   }
 
-  if (SerialBT.available()) {
-    char command = SerialBT.read();
-    Serial.println(command);
-    switch (command) {
-      case 'F':
-        servoSensor.write(servoForwardAngle);  // Set servo to forward on 'F'
-        delay(100);
-        moveForward();
-        isMovingForward = true;
-        isMovingBackward = false;
-        obstacleDetected = false;
-        break;
-      case 'B':
-        servoSensor.write(servoBackwardAngle);  // Set servo to backward on 'B'
-        delay(100);
-        moveBackward();
-        isMovingForward = false;
-        isMovingBackward = true;
-        obstacleDetected = false;
-        break;
-      case 'S':
-        stopMotors();
-        isMovingForward = false;
-        isMovingBackward = false;
-        obstacleDetected = false;
-        break;
-      case 'L':
-        TurnLeft();
-        delay(1000);
-        stopMotors();
-        isMovingForward = false;
-        isMovingBackward = false;
-        obstacleDetected = false;
-        break;
-      case 'R':
-        TurnRight();
-        delay(1000);
-        stopMotors();
-        isMovingForward = false;
-        isMovingBackward = false;
-        obstacleDetected = false;
-        break;
-      default:
-        Serial.println("Unknown command!");
-        break;
-    }
-  }
   delay(100);
 }
 
-void checkObstacleAndStop() {
-  long frontDistanceCm = ultrasonicFront.read();
-  if (frontDistanceCm <= frontStopDistanceCm && isMovingForward) {
-    stopMotors();
-    obstacleDetected = true;
-  }else if (frontDistanceCm <= rearStopDistanceCm && isMovingBackward) {
-    stopMotors();
-    obstacleDetected = true;
-  }
-}
-
 void moveForward() {
-  digitalWrite(motor1Pin1, LOW);
-  digitalWrite(motor1Pin2, HIGH);
-  digitalWrite(motor2Pin1, LOW);
-  digitalWrite(motor2Pin2, HIGH);
-  ledcWrite(enable1Pin, dutyCycle);
-  ledcWrite(enable2Pin, dutyCycle);
+  isMovingForward = true;
+  isMovingBackward = false;
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
 }
 
 void moveBackward() {
-  digitalWrite(motor1Pin1, HIGH);
-  digitalWrite(motor1Pin2, LOW);
-  digitalWrite(motor2Pin1, HIGH);
-  digitalWrite(motor2Pin2, LOW);
-  ledcWrite(enable1Pin, backwardDutyCycle);
-  ledcWrite(enable2Pin, backwardDutyCycle);
+  isMovingBackward = true;
+  isMovingForward = false;
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+}
+
+void turnLeft() {
+  isMovingForward = false;
+  isMovingBackward = false;
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+}
+
+void turnRight() {
+  isMovingForward = false;
+  isMovingBackward = false;
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
 }
 
 void stopMotors() {
-  digitalWrite(motor1Pin1, LOW);
-  digitalWrite(motor1Pin2, LOW);
-  digitalWrite(motor2Pin1, LOW);
-  digitalWrite(motor2Pin2, LOW);
-  ledcWrite(enable1Pin, 0);
-  ledcWrite(enable2Pin, 0);
+  isMovingForward = false;
+  isMovingBackward = false;
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
 }
+void handleAutoMode(long distanceFront) {
+  static unsigned long turnStartTime = 0;
+  static bool isTurning = false;
+  unsigned long now = millis();
 
-void TurnLeft() {
-  digitalWrite(motor1Pin1, HIGH);
-  digitalWrite(motor1Pin2, LOW);
-  digitalWrite(motor2Pin1, LOW);
-  digitalWrite(motor2Pin2, HIGH);
-  ledcWrite(enable1Pin, dutyCycle);
-  ledcWrite(enable2Pin, dutyCycle);
-}
+  switch (autoState) {
+    case MOVE_FORWARD:
+      if (distanceFront > 35 || distanceFront == 0) {
+        moveForward();
+      } else {
+        stopMotors();
+        isTurning = true;
+        turnStartTime = now;
+        autoState = TURN_RIGHT_AND_MOVE;
+      }
+      break;
 
-void TurnRight() {
-  digitalWrite(motor1Pin1, LOW);
-  digitalWrite(motor1Pin2, HIGH);
-  digitalWrite(motor2Pin1, HIGH);
-  digitalWrite(motor2Pin2, LOW);
-  ledcWrite(enable1Pin, dutyCycle);
-  ledcWrite(enable2Pin, dutyCycle);
+    case TURN_RIGHT_AND_MOVE:
+      if (isTurning) {
+        if (now - turnStartTime < 800) {
+          turnRight();
+          delay(200);
+          moveBackward();
+          delay(150);
+          turnRight();
+          delay(200);
+          moveBackward();
+          delay(150);
+          turnRight();
+          delay(200);
+          moveBackward();
+          delay(150);
+          turnRight();
+          delay(200);
+          moveBackward();
+          delay(150);
+          turnRight();
+          delay(200);
+          moveBackward();
+          delay(150);
+          turnRight();
+          delay(200);
+          moveBackward();
+          delay(150);
+          turnRight();
+          delay(200);
+          stopMotors();
+        } else {
+          stopMotors();
+          isTurning = false;
+          turnStartTime = now;
+        }
+      } else {
+        if (now - turnStartTime >= 800) {
+          autoState = MOVE_FORWARD;
+        }
+      }
+      break;
+
+    case IDLE:
+    default:
+      stopMotors();
+      break;
+  }
 }
